@@ -1,0 +1,1 @@
+"""ReadSMS FastAPI application package."""
