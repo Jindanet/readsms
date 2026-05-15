@@ -6,7 +6,6 @@ import com.readsms.app.model.SmsListResponse
 import com.readsms.app.model.SmsPayload
 import com.readsms.app.model.SmsSyncRequest
 import com.readsms.app.model.SmsSyncResponse
-import java.net.URLEncoder
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -83,9 +82,9 @@ class ApiClient(private val settings: SettingsStore) {
         val url = settings.baseUrl
             .replaceFirst("https://", "wss://")
             .replaceFirst("http://", "ws://")
-        val token = URLEncoder.encode(settings.apiToken, Charsets.UTF_8.name())
         val request = Request.Builder()
-            .url("$url/ws/viewer?token=$token")
+            .url("$url/ws/viewer")
+            .header("Authorization", "Bearer ${settings.apiToken}")
             .build()
         return http.newWebSocket(request, listener)
     }

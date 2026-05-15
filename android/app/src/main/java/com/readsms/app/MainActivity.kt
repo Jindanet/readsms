@@ -393,6 +393,7 @@ fun ReadSmsApp() {
     var pendingCount by remember { mutableStateOf(queue.countPending()) }
     var messages by remember { mutableStateOf<List<SmsRow>>(emptyList()) }
     var liveConnected by remember { mutableStateOf(false) }
+    var ownerHttpOnline by remember { mutableStateOf(false) }
     var tokenVisible by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(baseUrl.isBlank() || apiToken.isBlank()) }
     var batteryUnrestricted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
@@ -428,6 +429,7 @@ fun ReadSmsApp() {
             setupError = "ต้องกรอก Server URL และ API token ก่อนใช้งาน"
             showSettings = true
             liveConnected = false
+            ownerHttpOnline = false
             status = "ตั้งค่าการเชื่อมต่อก่อน"
             return
         }
@@ -443,6 +445,7 @@ fun ReadSmsApp() {
                 setupState = SetupState.Valid
                 setupError = null
                 showSettings = false
+                ownerHttpOnline = true
                 status = "เชื่อมต่อสำเร็จ"
                 reconnectNonce += 1
             }.onFailure {
@@ -450,6 +453,7 @@ fun ReadSmsApp() {
                 setupError = it.message ?: "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้"
                 showSettings = true
                 liveConnected = false
+                ownerHttpOnline = false
                 status = "ต้องแก้ค่าการเชื่อมต่อ"
             }
         }
@@ -460,6 +464,7 @@ fun ReadSmsApp() {
         setupError = "บันทึกเพื่อตรวจสอบค่าชุดนี้"
         showSettings = true
         liveConnected = false
+        ownerHttpOnline = false
     }
 
     fun hasSmsPermission(): Boolean {
@@ -496,6 +501,7 @@ fun ReadSmsApp() {
             runCatching {
                 withContext(Dispatchers.IO) { ApiClient(settings).recent(limit = 500) }
             }.onSuccess {
+                ownerHttpOnline = true
                 val known = messages.map { row -> "${row.deviceId}|${row.smsId}" }.toSet()
                 val newRows = it.messages.filter { row -> "${row.deviceId}|${row.smsId}" !in known }
                 messages = it.messages
@@ -518,6 +524,7 @@ fun ReadSmsApp() {
                     "อัปเดต ${it.count} ข้อความ"
                 }
             }.onFailure {
+                ownerHttpOnline = false
                 status = it.message ?: "รีเฟรชไม่สำเร็จ"
             }.also {
                 ownerRefreshInFlight = false
@@ -623,6 +630,9 @@ fun ReadSmsApp() {
     DisposableEffect(role, reconnectNonce, setupState) {
         if (role != "owner" || !setupValid) {
             liveConnected = false
+            if (role == "owner") {
+                ownerHttpOnline = false
+            }
             onDispose { }
         } else {
             persistSettings()
@@ -632,6 +642,7 @@ fun ReadSmsApp() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         scope.launch {
                             liveConnected = true
+                            ownerHttpOnline = true
                             status = "เรียลไทม์พร้อมใช้งาน"
                         }
                     }
@@ -716,6 +727,7 @@ fun ReadSmsApp() {
                         subtitle = if (role == "owner") {
                             when {
                                 setupState == SetupState.Valid && liveConnected -> "เรียลไทม์พร้อมใช้งาน"
+                                setupState == SetupState.Valid && ownerHttpOnline -> "ออนไลน์แบบ polling"
                                 setupState == SetupState.Valid -> "กำลังเชื่อมต่อเรียลไทม์"
                                 setupState == SetupState.Checking -> "กำลังตรวจสอบค่า"
                                 else -> "ต้องตั้งค่าก่อน"
@@ -723,7 +735,7 @@ fun ReadSmsApp() {
                         } else {
                             if (setupValid) "ซิงก์ SMS เบื้องหลัง" else "ต้องตั้งค่าก่อน"
                         },
-                        live = role == "owner" && liveConnected,
+                        live = role == "owner" && (liveConnected || ownerHttpOnline),
                         onSettings = { showSettings = if (!setupValid) true else !showSettings },
                         onRefresh = {
                             if (role == "owner") {
@@ -750,6 +762,7 @@ fun ReadSmsApp() {
                             settings.role = it
                             selectedThreadKey = null
                             ownerLoadedOnce = false
+                            ownerHttpOnline = false
                             if (it != "collector") {
                                 CollectorForegroundService.stop(context)
                                 collectorKeepAliveStarted = false
@@ -860,6 +873,7 @@ fun ReadSmsApp() {
                             onQueryChange = { searchQuery = it },
                             status = status,
                             liveConnected = liveConnected,
+                            ownerHttpOnline = ownerHttpOnline,
                             messageCount = messages.size,
                         )
                     }
@@ -942,6 +956,7 @@ private fun OwnerSearchBar(
     onQueryChange: (String) -> Unit,
     status: String,
     liveConnected: Boolean,
+    ownerHttpOnline: Boolean,
     messageCount: Int,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -974,8 +989,12 @@ private fun OwnerSearchBar(
             )
             Spacer(Modifier.width(12.dp))
             StatusChip(
-                label = if (liveConnected) "Realtime" else "ออฟไลน์",
-                positive = liveConnected,
+                label = when {
+                    liveConnected -> "Realtime"
+                    ownerHttpOnline -> "Polling"
+                    else -> "ออฟไลน์"
+                },
+                positive = liveConnected || ownerHttpOnline,
             )
             Spacer(Modifier.width(8.dp))
             Text("$messageCount ข้อความ", style = MaterialTheme.typography.bodySmall, color = Ui.muted)
