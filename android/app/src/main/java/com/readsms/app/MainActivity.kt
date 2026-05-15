@@ -580,6 +580,7 @@ fun ReadSmsApp() {
 
     LaunchedEffect(Unit) {
         SyncScheduler.schedulePeriodic(context)
+        SyncScheduler.scheduleCollectorWatchdog(context)
         validateSetup()
     }
 

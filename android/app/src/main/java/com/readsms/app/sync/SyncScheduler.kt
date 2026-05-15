@@ -1,6 +1,11 @@
 package com.readsms.app.sync
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.SystemClock
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -13,6 +18,8 @@ import java.util.concurrent.TimeUnit
 object SyncScheduler {
     private const val ONE_TIME_SYNC = "readsms-sync"
     private const val PERIODIC_SYNC = "readsms-periodic-sync"
+    private const val WATCHDOG_REQUEST_CODE = 4101
+    private const val WATCHDOG_INTERVAL_MS = 15L * 60L * 1000L
 
     fun enqueueNow(context: Context) {
         val constraints = Constraints.Builder()
@@ -41,5 +48,25 @@ object SyncScheduler {
             ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
+    }
+
+    fun scheduleCollectorWatchdog(context: Context) {
+        val appContext = context.applicationContext
+        val alarmManager = appContext.getSystemService(AlarmManager::class.java)
+        val intent = Intent(appContext, CollectorWatchdogReceiver::class.java).apply {
+            action = CollectorWatchdogReceiver.ACTION_COLLECTOR_WATCHDOG
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            appContext,
+            WATCHDOG_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val triggerAt = SystemClock.elapsedRealtime() + WATCHDOG_INTERVAL_MS
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pendingIntent)
+        } else {
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pendingIntent)
+        }
     }
 }

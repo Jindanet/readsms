@@ -11,6 +11,7 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 SyncScheduler.schedulePeriodic(context)
+                SyncScheduler.scheduleCollectorWatchdog(context)
                 SyncScheduler.enqueueNow(context)
                 if (SettingsStore(context).role == "collector") {
                     CollectorForegroundService.start(context)

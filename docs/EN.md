@@ -65,7 +65,8 @@ Android:
 - Reads SMS from the last 1 day.
 - Receives new SMS through a broadcast receiver.
 - Uses a local queue so messages are not lost when the network is down.
-- Retries sync through WorkManager.
+- Retries sync and performs backfill through WorkManager.
+- Uses a 15-minute alarm watchdog to help wake collectors on aggressive ROMs.
 - Uses a foreground keep-alive service for strict background restrictions.
 - Restarts sync after reboot.
 - Owner realtime through WebSocket.
@@ -250,8 +251,17 @@ AndroidX build failure:
 
 POCO/Xiaomi SMS or background sync issues:
 
-- App fix: foreground keep-alive service, WorkManager, boot receiver.
+- App fix: foreground keep-alive service, WorkManager backfill, alarm watchdog, boot receiver.
 - Device fix: SMS permission, notifications, autostart, unrestricted battery.
+
+If a POCO C65 stops syncing after several hours:
+
+- Install the latest APK. The newer collector worker reads SMS from the last 1 day itself, instead of only sending queued messages.
+- Open the app once after installing and choose `เครื่องรอง` / Collector.
+- Tap the 1-day pull button once to seed the queue.
+- Confirm the `ReadSMS Collector is running` notification appears after keep-alive starts.
+- Do not force-stop the app. Android will not wake receivers, workers, or alarms after a force stop until the user opens the app again.
+- If the notification disappears, the ROM may have killed the service, but the watchdog and WorkManager should catch up when Android allows background work again.
 
 Owner did not auto refresh or notify:
 

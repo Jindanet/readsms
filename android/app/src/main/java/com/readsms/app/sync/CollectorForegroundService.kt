@@ -39,6 +39,7 @@ class CollectorForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        SyncScheduler.scheduleCollectorWatchdog(this)
         startForeground(NOTIFICATION_ID, buildNotification("Starting keep-alive sync"))
         if (!loopStarted) {
             loopStarted = true
@@ -48,8 +49,15 @@ class CollectorForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        SyncScheduler.scheduleCollectorWatchdog(this)
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        SyncScheduler.enqueueNow(this)
+        SyncScheduler.scheduleCollectorWatchdog(this)
+        stopSelf(startId)
     }
 
     private suspend fun runLoop() {

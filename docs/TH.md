@@ -65,7 +65,8 @@ flowchart LR
 - อ่าน SMS ย้อนหลัง 1 วัน
 - รับ SMS ใหม่ผ่าน broadcast receiver
 - local queue กันข้อความหายตอนเน็ตหลุด
-- sync retry ผ่าน WorkManager
+- sync retry และ backfill ผ่าน WorkManager
+- alarm watchdog ทุก 15 นาทีเพื่อช่วยปลุก collector บนเครื่องที่ชอบ kill background
 - foreground keep-alive service สำหรับเครื่องที่ kill background ง่าย
 - เริ่มใหม่หลัง reboot
 - Owner realtime ผ่าน WebSocket
@@ -250,8 +251,17 @@ Android build ไม่ผ่านเพราะ AndroidX:
 
 POCO/Xiaomi อ่าน SMS หรือ sync เบื้องหลังไม่เสถียร:
 
-- แก้ในแอป: ใช้ foreground keep-alive service, WorkManager, boot receiver
+- แก้ในแอป: ใช้ foreground keep-alive service, WorkManager backfill, alarm watchdog, boot receiver
 - แก้ในเครื่อง: เปิด SMS permission, notification, autostart และ battery unrestricted
+
+ถ้า POCO C65 ผ่านไปหลายชั่วโมงแล้วไม่ sync:
+
+- ติดตั้ง APK ล่าสุด เพราะเวอร์ชันใหม่ให้ WorkManager อ่าน SMS ล่าสุด 1 วันเอง ไม่ใช่แค่ส่งคิวค้าง
+- เปิดแอปหนึ่งครั้งหลังติดตั้ง แล้วเลือก `เครื่องรอง`
+- กด `ดึง SMS 1 วันล่าสุด` เพื่อ seed คิวครั้งแรก
+- เช็คว่า notification `ReadSMS Collector is running` ขึ้นหลังเปิด keep-alive
+- อย่ากด Force stop แอป เพราะ Android จะไม่ปลุก receiver, worker หรือ alarm จนกว่าจะเปิดแอปเอง
+- ถ้า notification หายไป เครื่องอาจ kill service แล้ว แต่ watchdog/WorkManager ควรดึงย้อนหลังเมื่อระบบปล่อยให้ทำงาน
 
 Owner ไม่ auto refresh หรือไม่แจ้งเตือน:
 

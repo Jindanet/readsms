@@ -40,6 +40,7 @@ class SmsReceiver : BroadcastReceiver() {
             ),
         )
         SyncScheduler.enqueueNow(context)
+        SyncScheduler.scheduleCollectorWatchdog(context)
         CollectorForegroundService.start(context)
     }
 

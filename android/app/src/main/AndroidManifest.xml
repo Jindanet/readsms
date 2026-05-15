@@ -48,6 +48,10 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".sync.CollectorWatchdogReceiver"
+            android:exported="false" />
+
         <service
             android:name=".sync.CollectorForegroundService"
             android:exported="false"

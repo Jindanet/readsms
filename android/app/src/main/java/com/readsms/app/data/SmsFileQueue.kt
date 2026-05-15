@@ -14,8 +14,8 @@ class SmsFileQueue(context: Context) {
     fun append(messages: List<SmsPayload>): Int {
         if (messages.isEmpty()) return 0
         pendingFile.parentFile?.mkdirs()
-        val pendingIds = readPending(limit = Int.MAX_VALUE).map { it.smsId }.toSet()
-        val newMessages = messages.filterNot { it.smsId in pendingIds }
+        val knownIds = readIds(pendingFile) + readIds(syncedFile)
+        val newMessages = messages.filterNot { it.smsId in knownIds }
         if (newMessages.isEmpty()) return 0
         pendingFile.appendText(newMessages.joinToString(separator = "\n") { json.encodeToString(SmsPayload.serializer(), it) } + "\n")
         return newMessages.size
@@ -49,12 +49,33 @@ class SmsFileQueue(context: Context) {
             } + "\n"
         )
 
-        syncedFile.appendText(sent.joinToString(separator = "\n") { json.encodeToString(SmsPayload.serializer(), it) } + "\n")
+        val alreadySyncedIds = readIds(syncedFile)
+        val newSynced = sent.filterNot { it.smsId in alreadySyncedIds }
+        if (newSynced.isNotEmpty()) {
+            syncedFile.appendText(newSynced.joinToString(separator = "\n") { json.encodeToString(SmsPayload.serializer(), it) } + "\n")
+            trimSyncedFile()
+        }
     }
 
     @Synchronized
     fun countPending(): Int {
         if (!pendingFile.exists()) return 0
         return pendingFile.readLines().count { it.isNotBlank() }
+    }
+
+    private fun readIds(file: File): Set<String> {
+        if (!file.exists()) return emptySet()
+        return file.readLines()
+            .asSequence()
+            .filter { it.isNotBlank() }
+            .mapNotNull { runCatching { json.decodeFromString(SmsPayload.serializer(), it).smsId }.getOrNull() }
+            .toSet()
+    }
+
+    private fun trimSyncedFile(maxLines: Int = 5_000) {
+        if (!syncedFile.exists()) return
+        val lines = syncedFile.readLines().filter { it.isNotBlank() }
+        if (lines.size <= maxLines) return
+        syncedFile.writeText(lines.takeLast(maxLines).joinToString(separator = "\n") + "\n")
     }
 }
