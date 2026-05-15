@@ -20,6 +20,7 @@ import com.readsms.app.data.SmsReader
 import com.readsms.app.net.ApiClient
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -62,8 +63,15 @@ class CollectorForegroundService : Service() {
 
     private suspend fun runLoop() {
         while (true) {
-            val status = runCatching { syncOnce() }
-                .getOrElse { "Sync failed: ${it.message ?: it.javaClass.simpleName}" }
+            val status = try {
+                syncOnce()
+            } catch (error: CancellationException) {
+                SyncScheduler.enqueueNow(this)
+                SyncScheduler.scheduleCollectorWatchdog(this)
+                throw error
+            } catch (error: Throwable) {
+                "Sync failed: ${error.message ?: error.javaClass.simpleName}"
+            }
             updateNotification(status)
             delay(SYNC_INTERVAL_MS)
         }

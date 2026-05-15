@@ -10,6 +10,7 @@ import com.readsms.app.data.SmsFileQueue
 import com.readsms.app.data.SmsReader
 import com.readsms.app.net.ApiClient
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.core.content.ContextCompat
@@ -27,7 +28,7 @@ class SmsSyncWorker(
         val queue = SmsFileQueue(applicationContext)
         val client = ApiClient(settings)
 
-        runCatching {
+        try {
             if (settings.role == "collector" && hasSmsPermission(applicationContext)) {
                 val since = Instant.now().minusSeconds(24L * 60L * 60L).toEpochMilli()
                 queue.append(SmsReader.readInboxSince(applicationContext, since))
@@ -47,10 +48,13 @@ class SmsSyncWorker(
             if (settings.role == "collector") {
                 SyncScheduler.scheduleCollectorWatchdog(applicationContext)
             }
-        }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
-        )
+            Result.success()
+        } catch (error: CancellationException) {
+            SyncScheduler.scheduleCollectorWatchdog(applicationContext)
+            throw error
+        } catch (_: Throwable) {
+            Result.retry()
+        }
     }
 
     private fun hasSmsPermission(context: Context): Boolean {
