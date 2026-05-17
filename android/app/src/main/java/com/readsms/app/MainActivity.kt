@@ -270,6 +270,7 @@ private val darkUiPalette = UiPalette(
 )
 
 private val LocalUiPalette = staticCompositionLocalOf { lightUiPalette }
+private val LocalAppText = staticCompositionLocalOf { AppText.English }
 
 private object Ui {
     val page: Color
@@ -326,7 +327,6 @@ private enum class SetupState {
 }
 
 private const val OWNER_SMS_CHANNEL_ID = "owner_sms_realtime_silent"
-private const val OWNER_SMS_CHANNEL_NAME = "แจ้งเตือน SMS แบบเงียบ"
 private const val OWNER_SMS_GROUP = "owner_sms_group"
 private const val FRESH_NOTIFICATION_WINDOW_MS = 24L * 60L * 60L * 1000L
 private const val OWNER_POLL_INTERVAL_MS = 5_000L
@@ -389,7 +389,9 @@ fun ReadSmsApp() {
     var deviceId by remember { mutableStateOf(settings.deviceId) }
     var deviceName by remember { mutableStateOf(settings.deviceName) }
     var role by remember { mutableStateOf(settings.role) }
-    var status by remember { mutableStateOf("พร้อมใช้งาน") }
+    var language by remember { mutableStateOf(settings.language) }
+    val text = remember(language) { AppText.from(language) }
+    var status by remember { mutableStateOf(text.ready) }
     var pendingCount by remember { mutableStateOf(queue.countPending()) }
     var messages by remember { mutableStateOf<List<SmsRow>>(emptyList()) }
     var liveConnected by remember { mutableStateOf(false) }
@@ -411,8 +413,15 @@ fun ReadSmsApp() {
 
     val connectionReady = baseUrl.isNotBlank() && apiToken.isNotBlank()
     val setupValid = setupState == SetupState.Valid
-    val threads = remember(messages, searchQuery, readMessageKeys) { buildThreads(messages, searchQuery, readMessageKeys) }
+    val threads = remember(messages, searchQuery, readMessageKeys, text.unknownSender) {
+        buildThreads(messages, searchQuery, readMessageKeys, text.unknownSender)
+    }
     val selectedThread = threads.firstOrNull { it.key == selectedThreadKey }
+
+    LaunchedEffect(language) {
+        settings.language = language
+        status = text.ready
+    }
 
     fun persistSettings() {
         baseUrl = normalizeBaseUrl(baseUrl)
@@ -421,23 +430,24 @@ fun ReadSmsApp() {
         settings.deviceId = deviceId
         settings.deviceName = deviceName
         settings.role = role
+        settings.language = language
     }
 
     fun validateSetup() {
         if (!connectionReady) {
             setupState = SetupState.Missing
-            setupError = "ต้องกรอก Server URL และ API token ก่อนใช้งาน"
+            setupError = text.serverTokenRequired
             showSettings = true
             liveConnected = false
             ownerHttpOnline = false
-            status = "ตั้งค่าการเชื่อมต่อก่อน"
+            status = text.completeSetup
             return
         }
 
         persistSettings()
         setupState = SetupState.Checking
         setupError = null
-        status = "กำลังตรวจสอบเซิร์ฟเวอร์"
+        status = text.checkingServer
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { ApiClient(settings).validate() }
@@ -446,22 +456,22 @@ fun ReadSmsApp() {
                 setupError = null
                 showSettings = false
                 ownerHttpOnline = true
-                status = "เชื่อมต่อสำเร็จ"
+                status = text.connected
                 reconnectNonce += 1
             }.onFailure {
                 setupState = SetupState.Invalid
-                setupError = it.message ?: "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้"
+                setupError = it.message ?: text.cannotConnectServer
                 showSettings = true
                 liveConnected = false
                 ownerHttpOnline = false
-                status = "ต้องแก้ค่าการเชื่อมต่อ"
+                status = text.fixConnectionSetup
             }
         }
     }
 
     fun markSetupDirty() {
         setupState = SetupState.Missing
-        setupError = "บันทึกเพื่อตรวจสอบค่าชุดนี้"
+        setupError = text.saveToVerify
         showSettings = true
         liveConnected = false
         ownerHttpOnline = false
@@ -487,7 +497,7 @@ fun ReadSmsApp() {
 
     fun refreshOwner(notifyNew: Boolean = false) {
         if (!connectionReady) {
-            status = "กรอก Server URL และ API token ก่อน"
+            status = text.addServerToken
             showSettings = true
             return
         }
@@ -496,7 +506,7 @@ fun ReadSmsApp() {
         ownerRefreshInFlight = true
         scope.launch {
             if (!notifyNew) {
-                status = "กำลังดึงข้อความ"
+                status = text.syncingInbox
             }
             runCatching {
                 withContext(Dispatchers.IO) { ApiClient(settings).recent(limit = 500) }
@@ -518,14 +528,10 @@ fun ReadSmsApp() {
                     notifyFreshOwnerMessages(context, newRows)
                 }
                 ownerLoadedOnce = true
-                status = if (newRows.isNotEmpty()) {
-                    "อัปเดต ${it.count} ข้อความ, ใหม่ ${newRows.size}"
-                } else {
-                    "อัปเดต ${it.count} ข้อความ"
-                }
+                status = text.updated(it.count, newRows.size)
             }.onFailure {
                 ownerHttpOnline = false
-                status = it.message ?: "รีเฟรชไม่สำเร็จ"
+                status = it.message ?: text.refreshFailed
             }.also {
                 ownerRefreshInFlight = false
             }
@@ -534,18 +540,18 @@ fun ReadSmsApp() {
 
     fun pullRecentSms() {
         if (!connectionReady || !setupValid) {
-            status = "ตรวจสอบเซิร์ฟเวอร์ก่อน"
+            status = text.fixServerFirst
             showSettings = true
             return
         }
         if (!hasSmsPermission()) {
-            status = "อนุญาต SMS ก่อน"
+            status = text.allowSmsFirst
             return
         }
 
         persistSettings()
         scope.launch {
-            status = "กำลังอ่านข้อความในเครื่องนี้"
+            status = text.readingLocalSms
             runCatching {
                 withContext(Dispatchers.IO) {
                     val since = Instant.now().minusSeconds(24L * 60L * 60L).toEpochMilli()
@@ -556,9 +562,9 @@ fun ReadSmsApp() {
                 }
             }.onSuccess { (readCount, addedCount, pending) ->
                 pendingCount = pending
-                status = "อ่าน $readCount SMS, เข้าคิว $addedCount"
+                status = text.readQueued(readCount, addedCount)
             }.onFailure {
-                status = it.message ?: "อ่านข้อความในเครื่องไม่ได้"
+                status = it.message ?: text.cannotReadLocalSms
             }
         }
     }
@@ -567,12 +573,12 @@ fun ReadSmsApp() {
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         if (result.values.all { it }) {
-            status = "อนุญาต SMS แล้ว"
+            status = text.smsPermissionGranted
             if (role == "collector" && setupValid) {
                 pullRecentSms()
             }
         } else {
-            status = "ยังไม่ได้อนุญาต SMS"
+            status = text.smsPermissionMissing
         }
     }
 
@@ -581,7 +587,7 @@ fun ReadSmsApp() {
     ) { granted ->
         notificationPermissionGranted = granted
         if (!granted && role == "owner") {
-            status = "ยังไม่ได้อนุญาตแจ้งเตือน"
+            status = text.notificationPermissionMissing
         }
     }
 
@@ -636,20 +642,20 @@ fun ReadSmsApp() {
             onDispose { }
         } else {
             persistSettings()
-            status = "กำลังเชื่อมต่อเรียลไทม์"
+            status = text.connectingRealtime
             val webSocket = ApiClient(settings).viewerSocket(
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         scope.launch {
                             liveConnected = true
                             ownerHttpOnline = true
-                            status = "เรียลไทม์พร้อมใช้งาน"
+                            status = text.realtimeReady
                         }
                     }
 
-                    override fun onMessage(webSocket: WebSocket, text: String) {
+                    override fun onMessage(webSocket: WebSocket, messageText: String) {
                         runCatching {
-                            val root = json.parseToJsonElement(text).jsonObject
+                            val root = json.parseToJsonElement(messageText).jsonObject
                             if (root["type"]?.jsonPrimitive?.content == "sms.inserted") {
                                 val rows = root["messages"]?.jsonArray.orEmpty().map {
                                     json.decodeFromJsonElement(SmsRow.serializer(), it)
@@ -659,7 +665,7 @@ fun ReadSmsApp() {
                                     val newRows = rows.filter { row -> "${row.deviceId}|${row.smsId}" !in known }
                                     messages = mergeMessages(rows + messages).take(500)
                                     ownerLoadedOnce = true
-                                    status = "มีข้อความใหม่"
+                                    status = text.newMessageReceived
                                     notifyFreshOwnerMessages(context, newRows)
                                 }
                             }
@@ -669,7 +675,7 @@ fun ReadSmsApp() {
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         scope.launch {
                             liveConnected = false
-                            status = t.message ?: "เรียลไทม์หลุด กำลังต่อใหม่"
+                            status = t.message ?: text.realtimeDisconnectedRetry
                             delay(3_000L)
                             if (role == "owner" && setupValid) {
                                 reconnectNonce += 1
@@ -680,7 +686,7 @@ fun ReadSmsApp() {
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                         scope.launch {
                             liveConnected = false
-                            status = "เรียลไทม์ปิดอยู่"
+                            status = text.realtimeClosed
                         }
                     }
                 },
@@ -705,6 +711,7 @@ fun ReadSmsApp() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    CompositionLocalProvider(LocalAppText provides text) {
     Surface(modifier = Modifier.fillMaxSize(), color = Ui.page) {
         if (role == "owner" && selectedThread != null) {
             ThreadScreen(
@@ -723,17 +730,17 @@ fun ReadSmsApp() {
             ) {
                 item {
                     AppTopBar(
-                        title = if (role == "owner") "ข้อความ" else "ตัวเก็บ SMS",
+                        title = if (role == "owner") text.messagesTitle else text.collectorTitle,
                         subtitle = if (role == "owner") {
                             when {
-                                setupState == SetupState.Valid && liveConnected -> "เรียลไทม์พร้อมใช้งาน"
-                                setupState == SetupState.Valid && ownerHttpOnline -> "ออนไลน์แบบ polling"
-                                setupState == SetupState.Valid -> "กำลังเชื่อมต่อเรียลไทม์"
-                                setupState == SetupState.Checking -> "กำลังตรวจสอบค่า"
-                                else -> "ต้องตั้งค่าก่อน"
+                                setupState == SetupState.Valid && liveConnected -> text.realtimeReady
+                                setupState == SetupState.Valid && ownerHttpOnline -> text.pollingOnline
+                                setupState == SetupState.Valid -> text.connectingRealtime
+                                setupState == SetupState.Checking -> text.checkingSetup
+                                else -> text.setupRequired
                             }
                         } else {
-                            if (setupValid) "ซิงก์ SMS เบื้องหลัง" else "ต้องตั้งค่าก่อน"
+                            if (setupValid) text.backgroundSmsSync else text.setupRequired
                         },
                         live = role == "owner" && (liveConnected || ownerHttpOnline),
                         onSettings = { showSettings = if (!setupValid) true else !showSettings },
@@ -748,7 +755,7 @@ fun ReadSmsApp() {
                             } else {
                                 SyncScheduler.enqueueNow(context)
                                 pendingCount = queue.countPending()
-                                status = "สั่งซิงก์แล้ว"
+                                status = text.syncQueued
                             }
                         },
                     )
@@ -779,6 +786,7 @@ fun ReadSmsApp() {
                             apiToken = apiToken,
                             deviceId = deviceId,
                             deviceName = deviceName,
+                            language = language,
                             tokenVisible = tokenVisible,
                             onBaseUrlChange = {
                                 baseUrl = it.trim()
@@ -793,6 +801,10 @@ fun ReadSmsApp() {
                                 markSetupDirty()
                             },
                             onDeviceNameChange = { deviceName = it },
+                            onLanguageChange = {
+                                language = it
+                                settings.language = it
+                            },
                             onToggleToken = { tokenVisible = !tokenVisible },
                             setupState = setupState,
                             setupError = setupError,
@@ -807,13 +819,13 @@ fun ReadSmsApp() {
                     item {
                         EmptyState(
                             title = when (setupState) {
-                                SetupState.Checking -> "กำลังตรวจสอบการเชื่อมต่อ"
-                                SetupState.Missing -> "ตั้งค่าเซิร์ฟเวอร์ก่อน"
-                                SetupState.Invalid -> "ค่าการเชื่อมต่อยังไม่ถูก"
-                                SetupState.Valid -> "เชื่อมต่อแล้ว"
+                                SetupState.Checking -> text.setupCheckingConnection
+                                SetupState.Missing -> text.setupServerFirst
+                                SetupState.Invalid -> text.setupConnectionInvalid
+                                SetupState.Valid -> text.setupConnected
                             },
-                            body = setupError ?: "แอปจะตรวจ Server URL และ API token ทุกครั้งก่อนเริ่มซิงก์",
-                            actionLabel = "แก้ไขค่า",
+                            body = setupError ?: text.setupBody,
+                            actionLabel = text.editSetup,
                             onAction = { showSettings = true },
                         )
                     }
@@ -836,12 +848,12 @@ fun ReadSmsApp() {
                             },
                             onOpenAppSettings = {
                                 openAppSettings(context)
-                                status = "เปิด Permissions > SMS > Allow"
+                                status = text.openSmsPermissionPath
                             },
                             onRequestBatteryAccess = {
                                 requestIgnoreBatteryOptimizations(context)
                                 batteryUnrestricted = isIgnoringBatteryOptimizations(context)
-                                status = "ตั้งค่าแบตเตอรี่เป็นไม่จำกัด"
+                                status = text.allowBackgroundSync
                             },
                             onStartKeepAlive = {
                                 role = "collector"
@@ -849,7 +861,7 @@ fun ReadSmsApp() {
                                 persistSettings()
                                 CollectorForegroundService.start(context)
                                 collectorKeepAliveStarted = true
-                                status = "เปิดซิงก์ตลอดเวลาแล้ว"
+                                status = text.startKeepAliveSync
                             },
                             onBackfill = {
                                 pullRecentSms()
@@ -862,7 +874,7 @@ fun ReadSmsApp() {
                                 collectorKeepAliveStarted = true
                                 SyncScheduler.enqueueNow(context)
                                 pendingCount = queue.countPending()
-                                status = "สั่งซิงก์แล้ว"
+                                status = text.syncQueued
                             },
                         )
                     }
@@ -881,9 +893,9 @@ fun ReadSmsApp() {
                     if (threads.isEmpty()) {
                         item {
                             EmptyState(
-                                title = if (searchQuery.isBlank()) "ยังไม่มีข้อความ" else "ไม่เจอข้อความที่ค้นหา",
-                                body = if (searchQuery.isBlank()) "เมื่อเครื่อง B หรือ C ซิงก์สำเร็จ บทสนทนาจะขึ้นที่นี่อัตโนมัติ" else "ลองค้นหาด้วยชื่อผู้ส่ง เครื่อง หรือข้อความอื่น",
-                                actionLabel = "รีเฟรช",
+                                title = if (searchQuery.isBlank()) text.noMessages else text.noMatchingMessages,
+                                body = if (searchQuery.isBlank()) text.noMessagesBody else text.noMatchingBody,
+                                actionLabel = text.refresh,
                                 onAction = { reconnectNonce += 1 },
                             )
                         }
@@ -901,6 +913,7 @@ fun ReadSmsApp() {
             }
         }
     }
+    }
 }
 
 @Composable
@@ -911,6 +924,7 @@ private fun AppTopBar(
     onSettings: () -> Unit,
     onRefresh: () -> Unit,
 ) {
+    val text = LocalAppText.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -942,10 +956,10 @@ private fun AppTopBar(
             }
         }
         IconButton(onClick = onRefresh) {
-            Icon(Icons.Default.Refresh, contentDescription = "รีเฟรช", tint = Ui.muted)
+            Icon(Icons.Default.Refresh, contentDescription = text.refresh, tint = Ui.muted)
         }
         IconButton(onClick = onSettings) {
-            Icon(Icons.Default.MoreVert, contentDescription = "ตั้งค่า", tint = Ui.muted)
+            Icon(Icons.Default.MoreVert, contentDescription = text.settings, tint = Ui.muted)
         }
     }
 }
@@ -959,6 +973,7 @@ private fun OwnerSearchBar(
     ownerHttpOnline: Boolean,
     messageCount: Int,
 ) {
+    val text = LocalAppText.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -971,7 +986,7 @@ private fun OwnerSearchBar(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Ui.muted) },
-                placeholder = { Text("ค้นหาข้อความ", color = Ui.muted) },
+                placeholder = { Text(text.searchMessages, color = Ui.muted) },
             )
         }
         Row(
@@ -990,14 +1005,14 @@ private fun OwnerSearchBar(
             Spacer(Modifier.width(12.dp))
             StatusChip(
                 label = when {
-                    liveConnected -> "Realtime"
-                    ownerHttpOnline -> "Polling"
-                    else -> "ออฟไลน์"
+                    liveConnected -> text.realtime
+                    ownerHttpOnline -> text.polling
+                    else -> text.offline
                 },
                 positive = liveConnected || ownerHttpOnline,
             )
             Spacer(Modifier.width(8.dp))
-            Text("$messageCount ข้อความ", style = MaterialTheme.typography.bodySmall, color = Ui.muted)
+            Text(text.messageCount(messageCount), style = MaterialTheme.typography.bodySmall, color = Ui.muted)
         }
     }
 }
@@ -1058,6 +1073,7 @@ private fun ConversationRow(thread: SmsThread, onClick: () -> Unit) {
 
 @Composable
 private fun ThreadScreen(thread: SmsThread, readMessageKeys: Set<String>, onBack: () -> Unit) {
+    val text = LocalAppText.current
     val sortedMessages = thread.messages.sortedBy { it.receivedAtMs }
     val firstUnreadIndex = sortedMessages.indexOfFirst { messageKey(it) !in readMessageKeys }
     Column(modifier = Modifier.fillMaxSize().background(Ui.page)) {
@@ -1068,7 +1084,7 @@ private fun ThreadScreen(thread: SmsThread, readMessageKeys: Set<String>, onBack
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "กลับ", tint = Ui.text)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = text.back, tint = Ui.text)
             }
             Avatar(text = thread.sender, size = 38.dp)
             Spacer(Modifier.width(12.dp))
@@ -1082,11 +1098,7 @@ private fun ThreadScreen(thread: SmsThread, readMessageKeys: Set<String>, onBack
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = if (thread.unreadCount > 0) {
-                        "${thread.deviceId} • ${thread.unreadCount} ยังไม่อ่าน • ${thread.count} SMS"
-                    } else {
-                        "${thread.deviceId} • อ่านแล้วทั้งหมด • ${thread.count} SMS"
-                    },
+                    text = text.threadSubtitle(thread.deviceId, thread.unreadCount, thread.count),
                     style = MaterialTheme.typography.bodySmall,
                     color = Ui.muted,
                     maxLines = 1,
@@ -1111,6 +1123,7 @@ private fun ThreadScreen(thread: SmsThread, readMessageKeys: Set<String>, onBack
 
 @Composable
 private fun MessageBubble(message: SmsRow, isUnread: Boolean) {
+    val text = LocalAppText.current
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
         Surface(
             color = if (isUnread) Ui.bubbleUnread else Ui.bubbleIn,
@@ -1120,7 +1133,7 @@ private fun MessageBubble(message: SmsRow, isUnread: Boolean) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 if (isUnread) {
                     Text(
-                        text = "ใหม่",
+                        text = text.newLabel,
                         style = MaterialTheme.typography.labelSmall,
                         color = Ui.blue,
                         fontWeight = FontWeight.Bold,
@@ -1159,9 +1172,10 @@ private fun CollectorHome(
     onBackfill: () -> Unit,
     onSync: () -> Unit,
 ) {
+    val text = LocalAppText.current
     Panel {
         Text(
-            text = "สถานะซิงก์",
+            text = text.syncStatus,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
             color = Ui.text,
@@ -1169,11 +1183,11 @@ private fun CollectorHome(
         Text(status, style = MaterialTheme.typography.bodyMedium, color = Ui.muted)
         Spacer(Modifier.height(16.dp))
 
-        StatusLine("เซิร์ฟเวอร์", if (connectionReady) "พร้อม" else "ยังไม่ครบ", connectionReady)
-        StatusLine("สิทธิ์ SMS", if (hasSmsPermission) "อนุญาตแล้ว" else "ต้องอนุญาต", hasSmsPermission)
-        StatusLine("แบตเตอรี่", if (batteryUnrestricted) "ไม่จำกัด" else "ถูกจำกัด", batteryUnrestricted)
-        StatusLine("ซิงก์ตลอดเวลา", if (keepAliveStarted) "เปิด" else "ปิด", keepAliveStarted)
-        StatusLine("คิวส่ง", "$pendingCount ค้างส่ง", pendingCount == 0)
+        StatusLine(text.server, if (connectionReady) text.readyValue else text.missingValue, connectionReady)
+        StatusLine(text.smsAccess, if (hasSmsPermission) text.allowed else text.needsPermission, hasSmsPermission)
+        StatusLine(text.battery, if (batteryUnrestricted) text.unrestricted else text.restricted, batteryUnrestricted)
+        StatusLine(text.keepAlive, if (keepAliveStarted) text.on else text.off, keepAliveStarted)
+        StatusLine(text.queue, text.pendingCount(pendingCount), pendingCount == 0)
 
         Spacer(Modifier.height(18.dp))
         if (!hasSmsPermission) {
@@ -1184,7 +1198,7 @@ private fun CollectorHome(
             ) {
                 Icon(Icons.Default.Sms, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("อนุญาตอ่าน SMS")
+                Text(text.allowSmsAccess)
             }
             Spacer(Modifier.height(10.dp))
             OutlinedButton(
@@ -1194,7 +1208,7 @@ private fun CollectorHome(
             ) {
                 Icon(Icons.Default.Settings, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("เปิดหน้าสิทธิ์แอป")
+                Text(text.openAppPermissions)
             }
             Spacer(Modifier.height(10.dp))
         }
@@ -1206,7 +1220,7 @@ private fun CollectorHome(
             ) {
                 Icon(Icons.Default.Warning, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("อนุญาตซิงก์เบื้องหลัง")
+                Text(text.allowBackgroundSync)
             }
             Spacer(Modifier.height(10.dp))
         }
@@ -1219,7 +1233,7 @@ private fun CollectorHome(
             ) {
                 Icon(Icons.Default.Wifi, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("เปิดซิงก์ตลอดเวลา")
+                Text(text.startKeepAliveSync)
             }
             Spacer(Modifier.height(10.dp))
         }
@@ -1231,7 +1245,7 @@ private fun CollectorHome(
         ) {
             Icon(Icons.Default.Refresh, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("ดึง SMS 1 วันล่าสุด")
+            Text(text.pullLastDay)
         }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(
@@ -1242,7 +1256,7 @@ private fun CollectorHome(
         ) {
             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("ซิงก์ตอนนี้")
+            Text(text.syncNow)
         }
     }
 }
@@ -1253,22 +1267,25 @@ private fun SettingsPanel(
     apiToken: String,
     deviceId: String,
     deviceName: String,
+    language: String,
     tokenVisible: Boolean,
     onBaseUrlChange: (String) -> Unit,
     onApiTokenChange: (String) -> Unit,
     onDeviceIdChange: (String) -> Unit,
     onDeviceNameChange: (String) -> Unit,
+    onLanguageChange: (String) -> Unit,
     onToggleToken: () -> Unit,
     setupState: SetupState,
     setupError: String?,
     onSave: () -> Unit,
 ) {
+    val text = LocalAppText.current
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Settings, contentDescription = null, tint = Ui.blue)
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "ตั้งค่าการเชื่อมต่อ",
+                text = text.connectionSetup,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Ui.text,
@@ -1280,7 +1297,7 @@ private fun SettingsPanel(
         OutlinedTextField(
             value = baseUrl,
             onValueChange = onBaseUrlChange,
-            label = { Text("Server URL") },
+            label = { Text(text.serverUrl) },
             leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -1289,13 +1306,13 @@ private fun SettingsPanel(
         OutlinedTextField(
             value = apiToken,
             onValueChange = onApiTokenChange,
-            label = { Text("API token") },
+            label = { Text(text.apiToken) },
             leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null) },
             trailingIcon = {
                 IconButton(onClick = onToggleToken) {
                     Icon(
                         imageVector = if (tokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (tokenVisible) "ซ่อน API token" else "แสดง API token",
+                        contentDescription = if (tokenVisible) text.hideApiToken else text.showApiToken,
                     )
                 }
             },
@@ -1307,7 +1324,7 @@ private fun SettingsPanel(
         OutlinedTextField(
             value = deviceName,
             onValueChange = onDeviceNameChange,
-            label = { Text("ชื่อเครื่อง") },
+            label = { Text(text.deviceName) },
             leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -1316,10 +1333,22 @@ private fun SettingsPanel(
         OutlinedTextField(
             value = deviceId,
             onValueChange = onDeviceIdChange,
-            label = { Text("Device ID") },
+            label = { Text(text.deviceId) },
             leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = text.languageTitle,
+            color = Ui.text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(8.dp))
+        LanguageSegment(
+            language = language,
+            onLanguageChange = onLanguageChange,
         )
         Spacer(Modifier.height(14.dp))
         Button(
@@ -1327,26 +1356,27 @@ private fun SettingsPanel(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(22.dp),
         ) {
-            Text(if (setupState == SetupState.Checking) "กำลังตรวจสอบ..." else "ตรวจสอบและบันทึก")
+            Text(if (setupState == SetupState.Checking) text.checking else text.checkAndSave)
         }
     }
 }
 
 @Composable
 private fun SetupCheckPanel(setupState: SetupState, setupError: String?) {
+    val text = LocalAppText.current
     val positive = setupState == SetupState.Valid
     val checking = setupState == SetupState.Checking
     val title = when (setupState) {
-        SetupState.Missing -> "ต้องตั้งค่าก่อน"
-        SetupState.Checking -> "กำลังตรวจสอบการเชื่อมต่อ"
-        SetupState.Valid -> "เชื่อมต่อได้แล้ว"
-        SetupState.Invalid -> "เชื่อมต่อไม่ได้"
+        SetupState.Missing -> text.setupPanelMissing
+        SetupState.Checking -> text.setupPanelChecking
+        SetupState.Valid -> text.setupPanelValid
+        SetupState.Invalid -> text.setupPanelInvalid
     }
     val body = when (setupState) {
-        SetupState.Missing -> "กรอก Server URL และ API token ก่อนเริ่มใช้งาน"
-        SetupState.Checking -> "กำลังทดสอบ Server URL และ API token ที่บันทึกไว้"
-        SetupState.Valid -> "เครื่องนี้ติดต่อ backend ได้เรียบร้อย"
-        SetupState.Invalid -> setupError ?: "ตรวจ Server URL, port, Wi-Fi และ API token อีกครั้ง"
+        SetupState.Missing -> text.setupPanelMissingBody
+        SetupState.Checking -> text.setupPanelCheckingBody
+        SetupState.Valid -> text.setupPanelValidBody
+        SetupState.Invalid -> setupError ?: text.setupPanelInvalidBody
     }
 
     Surface(
@@ -1375,6 +1405,7 @@ private fun SetupCheckPanel(setupState: SetupState, setupError: String?) {
 
 @Composable
 private fun RoleSegment(role: String, onRoleChange: (String) -> Unit) {
+    val text = LocalAppText.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1384,16 +1415,42 @@ private fun RoleSegment(role: String, onRoleChange: (String) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         SegmentChoice(
-            label = "เครื่องหลัก",
+            label = text.ownerMode,
             selected = role == "owner",
             modifier = Modifier.weight(1f),
             onClick = { onRoleChange("owner") },
         )
         SegmentChoice(
-            label = "เครื่องรอง",
+            label = text.collectorMode,
             selected = role == "collector",
             modifier = Modifier.weight(1f),
             onClick = { onRoleChange("collector") },
+        )
+    }
+}
+
+@Composable
+private fun LanguageSegment(language: String, onLanguageChange: (String) -> Unit) {
+    val text = LocalAppText.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(Ui.chip)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        SegmentChoice(
+            label = text.languageEnglish,
+            selected = language != "th",
+            modifier = Modifier.weight(1f),
+            onClick = { onLanguageChange("en") },
+        )
+        SegmentChoice(
+            label = text.languageThai,
+            selected = language == "th",
+            modifier = Modifier.weight(1f),
+            onClick = { onLanguageChange("th") },
         )
     }
 }
@@ -1470,6 +1527,7 @@ private fun UnreadBadge(count: Int) {
 
 @Composable
 private fun NewMessagesDivider(count: Int) {
+    val text = LocalAppText.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1483,7 +1541,7 @@ private fun NewMessagesDivider(count: Int) {
             color = Ui.blueSoft,
         ) {
             Text(
-                text = if (count == 1) "1 ข้อความใหม่" else "$count ข้อความใหม่",
+                text = text.newMessages(count),
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 color = Ui.blue,
                 style = MaterialTheme.typography.labelSmall,
@@ -1564,7 +1622,12 @@ private fun StatusChip(label: String, positive: Boolean) {
     }
 }
 
-private fun buildThreads(messages: List<SmsRow>, query: String, readMessageKeys: Set<String>): List<SmsThread> {
+private fun buildThreads(
+    messages: List<SmsRow>,
+    query: String,
+    readMessageKeys: Set<String>,
+    unknownSender: String,
+): List<SmsThread> {
     val normalizedQuery = query.trim().casefold()
     val filtered = if (normalizedQuery.isBlank()) {
         messages
@@ -1584,7 +1647,7 @@ private fun buildThreads(messages: List<SmsRow>, query: String, readMessageKeys:
             val unreadCount = rows.count { messageKey(it) !in readMessageKeys }
             SmsThread(
                 key = key,
-                sender = latest.sender?.takeIf { it.isNotBlank() } ?: "ไม่ทราบผู้ส่ง",
+                sender = latest.sender?.takeIf { it.isNotBlank() } ?: unknownSender,
                 deviceId = latest.deviceId,
                 latestBody = latest.body,
                 latestAt = latest.receivedAt,
@@ -1652,13 +1715,14 @@ private fun canPostNotifications(context: Context): Boolean {
 private fun ensureOwnerNotificationChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
+    val text = AppText.from(SettingsStore(context).language)
     val manager = context.getSystemService(NotificationManager::class.java)
     val channel = NotificationChannel(
         OWNER_SMS_CHANNEL_ID,
-        OWNER_SMS_CHANNEL_NAME,
+        text.ownerSmsChannelName,
         NotificationManager.IMPORTANCE_HIGH,
     ).apply {
-        description = "แจ้งเตือน SMS ใหม่แบบไม่มีเสียงสำหรับเครื่อง Owner"
+        description = text.ownerSmsChannelDescription
         setSound(null, null)
         enableVibration(false)
         setShowBadge(true)
@@ -1669,6 +1733,7 @@ private fun ensureOwnerNotificationChannel(context: Context) {
 private fun notifyFreshOwnerMessages(context: Context, rows: List<SmsRow>) {
     if (!canPostNotifications(context)) return
     ensureOwnerNotificationChannel(context)
+    val text = AppText.from(SettingsStore(context).language)
 
     val now = System.currentTimeMillis()
     val freshRows = rows
@@ -1691,9 +1756,9 @@ private fun notifyFreshOwnerMessages(context: Context, rows: List<SmsRow>) {
     val manager = NotificationManagerCompat.from(context)
 
     freshRows.forEach { row ->
-        val sender = row.sender?.takeIf { it.isNotBlank() } ?: "ไม่ทราบผู้ส่ง"
+        val sender = row.sender?.takeIf { it.isNotBlank() } ?: text.unknownSender
         val title = sender
-        val details = "จาก ${row.deviceId}"
+        val details = "${text.fromDevicePrefix} ${row.deviceId}"
         val notification = NotificationCompat.Builder(context, OWNER_SMS_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sms_notification)
             .setContentTitle(title)
@@ -1721,13 +1786,13 @@ private fun notifyFreshOwnerMessages(context: Context, rows: List<SmsRow>) {
 
     if (freshRows.size > 1) {
         val summary = freshRows.fold(NotificationCompat.InboxStyle()) { style, row ->
-            val sender = row.sender?.takeIf { it.isNotBlank() } ?: "ไม่ทราบผู้ส่ง"
+            val sender = row.sender?.takeIf { it.isNotBlank() } ?: text.unknownSender
             style.addLine("$sender: ${row.body}")
         }
         val notification = NotificationCompat.Builder(context, OWNER_SMS_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sms_notification)
-            .setContentTitle("มี SMS ใหม่ ${freshRows.size} ข้อความ")
-            .setContentText("ReadSMS ได้รับข้อความใหม่")
+            .setContentTitle(text.newSmsTitle(freshRows.size))
+            .setContentText(text.readSmsReceived)
             .setStyle(summary)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)

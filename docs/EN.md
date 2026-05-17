@@ -74,7 +74,7 @@ Android:
 - Silent owner notifications for new SMS.
 - New/unread state in the owner inbox.
 - Android system light/dark mode.
-- Thai-friendly UI copy and typography.
+- English/Thai UI support, with English as the default language.
 
 Server:
 
@@ -164,18 +164,20 @@ Phone A:
 1. Install the APK.
 2. Choose `เครื่องหลัก` / Owner.
 3. Enter Server URL and API token.
-4. Validate and save.
-5. The app loads messages and starts realtime automatically.
+4. Change language if needed. English is the default.
+5. Validate and save.
+6. The app loads messages and starts realtime automatically.
 
 Phones B/C:
 
 1. Install the APK.
 2. Choose `เครื่องรอง` / Collector.
 3. Enter Server URL and API token.
-4. Validate and save.
-5. Grant SMS permission.
-6. Allow background sync or unrestricted battery.
-7. Confirm that keep-alive sync is on.
+4. Change language if needed. English is the default.
+5. Validate and save.
+6. Grant SMS permission.
+7. Allow background sync or unrestricted battery.
+8. Confirm that keep-alive sync is on.
 
 ## 9. Main API
 

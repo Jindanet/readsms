@@ -19,6 +19,10 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("role", "collector") ?: "collector"
         set(value) = prefs.edit().putString("role", value).apply()
 
+    var language: String
+        get() = prefs.getString("language", "en") ?: "en"
+        set(value) = prefs.edit().putString("language", if (value == "th") "th" else "en").apply()
+
     var ownerReadInitialized: Boolean
         get() = prefs.getBoolean("owner_read_initialized", false)
         set(value) = prefs.edit().putBoolean("owner_read_initialized", value).apply()

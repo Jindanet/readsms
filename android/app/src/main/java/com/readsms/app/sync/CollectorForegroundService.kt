@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.readsms.app.AppText
 import com.readsms.app.MainActivity
 import com.readsms.app.R
 import com.readsms.app.data.SettingsStore
@@ -40,8 +41,9 @@ class CollectorForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val text = AppText.from(SettingsStore(this).language)
         SyncScheduler.scheduleCollectorWatchdog(this)
-        startForeground(NOTIFICATION_ID, buildNotification("Starting keep-alive sync"))
+        startForeground(NOTIFICATION_ID, buildNotification(text.collectorStarting))
         if (!loopStarted) {
             loopStarted = true
             scope.launch { runLoop() }
@@ -70,7 +72,8 @@ class CollectorForegroundService : Service() {
                 SyncScheduler.scheduleCollectorWatchdog(this)
                 throw error
             } catch (error: Throwable) {
-                "Sync failed: ${error.message ?: error.javaClass.simpleName}"
+                val text = AppText.from(SettingsStore(this).language)
+                "${text.collectorSyncFailedPrefix}: ${error.message ?: error.javaClass.simpleName}"
             }
             updateNotification(status)
             delay(SYNC_INTERVAL_MS)
@@ -79,14 +82,15 @@ class CollectorForegroundService : Service() {
 
     private suspend fun syncOnce(): String = withContext(Dispatchers.IO) {
         val settings = SettingsStore(applicationContext)
+        val text = AppText.from(settings.language)
         if (settings.role != "collector") {
             settings.role = "collector"
         }
         if (settings.baseUrl.isBlank() || settings.apiToken.isBlank()) {
-            return@withContext "Waiting for server setup"
+            return@withContext text.collectorWaitingSetup
         }
         if (!hasSmsPermission()) {
-            return@withContext "Waiting for SMS permission"
+            return@withContext text.collectorWaitingSmsPermission
         }
 
         val queue = SmsFileQueue(applicationContext)
@@ -105,7 +109,7 @@ class CollectorForegroundService : Service() {
         }
 
         val pending = queue.countPending()
-        "Read ${rows.size}, queued $added, synced $synced, pending $pending"
+        text.collectorStatus(rows.size, added, synced, pending)
     }
 
     private fun hasSmsPermission(): Boolean {
@@ -115,12 +119,13 @@ class CollectorForegroundService : Service() {
 
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val text = AppText.from(SettingsStore(this).language)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Collector keep-alive sync",
+            text.collectorChannelName,
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Keeps SMS sync running on restricted Android devices"
+            description = text.collectorChannelDescription
             setSound(null, null)
             enableVibration(false)
         }
@@ -130,7 +135,7 @@ class CollectorForegroundService : Service() {
     private fun buildNotification(status: String) =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sms_notification)
-            .setContentTitle("ReadSMS Collector is running")
+            .setContentTitle(AppText.from(SettingsStore(this).language).collectorNotificationTitle)
             .setContentText(status)
             .setStyle(NotificationCompat.BigTextStyle().bigText(status))
             .setContentIntent(openAppIntent())
