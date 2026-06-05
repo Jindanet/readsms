@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -38,7 +39,7 @@ class ApiTest(unittest.TestCase):
                     "sms_id": "android-1",
                     "sender": "KBank",
                     "body": "OTP 123456",
-                    "received_at": "2026-05-14T10:20:00+07:00",
+                    "received_at": datetime.now(UTC).isoformat(),
                     "sim_slot": 1,
                     "direction": "inbox",
                 }

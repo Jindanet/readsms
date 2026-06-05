@@ -8,9 +8,11 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.readsms.app.AppText
 import com.readsms.app.MainActivity
@@ -43,7 +45,7 @@ class CollectorForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val text = AppText.from(SettingsStore(this).language)
         SyncScheduler.scheduleCollectorWatchdog(this)
-        startForeground(NOTIFICATION_ID, buildNotification(text.collectorStarting))
+        startAsForeground(text.collectorStarting)
         if (!loopStarted) {
             loopStarted = true
             scope.launch { runLoop() }
@@ -55,6 +57,12 @@ class CollectorForegroundService : Service() {
         SyncScheduler.scheduleCollectorWatchdog(this)
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        SyncScheduler.enqueueNow(this)
+        SyncScheduler.scheduleCollectorWatchdog(this)
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
@@ -143,6 +151,20 @@ class CollectorForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+
+    private fun startAsForeground(status: String) {
+        val notification = buildNotification(status)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
 
     private fun updateNotification(status: String) {
         val manager = getSystemService(NotificationManager::class.java)
